@@ -1,125 +1,162 @@
-'''
-sensor platform配置
-'''
-import logging
-# from homeassistant.components.sensor import SensorEntity
-from homeassistant.helpers.entity import Entity
-from homeassistant.helpers.device_registry import DeviceEntryType
-from homeassistant.const import CONF_NAME, ATTR_ATTRIBUTION
+"""Typed native sensor values with stable legacy unique IDs."""
 
+from dataclasses import dataclass
 
-from .const import (
-    ATTRIBUTION, DOMAIN, OPTIONS, MANUFACTURER, OPTIONAL_SENSORS, SUG_OPTIONS,
-    CONF_SUGG, COORDINATOR
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+)
+from homeassistant.const import (
+    PERCENTAGE,
+    UnitOfDensity,
+    UnitOfLength,
+    UnitOfPressure,
+    UnitOfSpeed,
+    UnitOfTemperature,
 )
 
-_LOGGER = logging.getLogger(__name__)
-
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    """sensor setup"""
-    try:
-        name = config_entry.data[CONF_NAME]
-        sugg = config_entry.options.get(CONF_SUGG)
-
-        coordinator = hass.data[DOMAIN][config_entry.entry_id][COORDINATOR]
-
-        sensors = []
-        if sugg:
-            OPTIONS.update(SUG_OPTIONS)
-
-        for sensor in OPTIONS:
-            sensors.append(HfweatherSensor(name, sensor, sugg, coordinator))
-
-        async_add_entities(sensors, update_before_add=False)
-    except Exception as e:
-        _LOGGER.info("hew- sensor setup entry: %s", e)
-        raise e
+from .const import DOMAIN
+from .entity import HfEntity
 
 
-class HfweatherSensor(Entity):
-    """定义一个温度传感器的类，继承自HomeAssistant的Entity类."""
+@dataclass(frozen=True, kw_only=True)
+class HfSensorDescription(SensorEntityDescription):
+    group: str = "current"
 
-    def __init__(self, name, sensor, sugg, coordinator):
-        """初始化."""
-        self.wsdata = coordinator.data["wsdata"]
-        self.sgdata = coordinator.data["sgdata"]
-        self.coordinator = coordinator
-        self.sugg = sugg
-        opobj = OPTIONS[sensor]
-        self._device_class = opobj[0] if opobj[0] else ''
-        self._name = f"{name} {opobj[1]}"
-        self._icon = opobj[2]
-        self._attrs = {ATTR_ATTRIBUTION: ATTRIBUTION}
-        self._unit_of_measurement = opobj[3] if (
-            coordinator.data["is_metric"] == "metric:v2") else opobj[4]
-        self._type = sensor
-        self._updatetime = self.wsdata["updatetime"]
-        self.location_key = coordinator.data["location_key"]
-        # 最好前面和weather对象保持一致，疑似需要
-        self._attr_unique_id = f"{self.location_key}-{self._type}".lower()
 
-    @property
-    def name(self):
-        return self._name
+def description(
+    key, name, unit=None, device_class=None, group="current", icon=None, enabled=True
+):
+    return HfSensorDescription(
+        key=key,
+        name=name,
+        native_unit_of_measurement=unit,
+        device_class=device_class,
+        group=group,
+        icon=icon,
+        entity_registry_enabled_default=enabled,
+    )
 
-    @property
-    def should_poll(self):
-        """Return the polling requirement of the entity."""
-        return False
 
-    @property
-    def attribution(self):
-        """Return the attribution."""
-        return ATTRIBUTION
-
-    @property
-    def unique_id(self):
-        """Return a unique_id for this entity."""
-        return self._attr_unique_id
-
-    @property
-    def device_class(self):
-        return self._device_class
-
-    @property
-    def device_info(self):
-        """Return the device info."""
-        return {
-            # 踩坑。。。。HfweatherSensor要注册到Hfweather设备，这里到identifiers要和HfweatherEntity保持一致
-            "identifiers": {(DOMAIN, self.location_key)},
-            "name": self._name,
-            "manufacturer": MANUFACTURER,
-            "entry_type": DeviceEntryType.SERVICE
-        }
-
-    @property
-    def state(self):
-        """设置state"""
-        if self._type in self.wsdata:
-            return self.wsdata[self._type]
-        elif self._type in self.sgdata and self.sugg:
-            return self.sgdata[self._type]
-
-    @property
-    def icon(self):
-        """返回icon属性."""
-        return self._icon
-
-    @property
-    def unit_of_measurement(self):
-        """返回unit_of_measuremeng属性."""
-        return self._unit_of_measurement
-
-    @property
-    def entity_registry_enabled_default(self):
-        return bool(self._type not in OPTIONAL_SENSORS)
-
-    async def async_added_to_hass(self):
-        """Connect to dispatcher listening for entity data notifications."""
-        self.async_on_remove(
-            self.coordinator.async_add_listener(self.async_write_ha_state)
+SENSORS = (
+    description(
+        "temperature",
+        "室外温度",
+        UnitOfTemperature.CELSIUS,
+        SensorDeviceClass.TEMPERATURE,
+    ),
+    description("humidity", "室外湿度", PERCENTAGE, SensorDeviceClass.HUMIDITY),
+    description(
+        "feelsLike",
+        "体感温度",
+        UnitOfTemperature.CELSIUS,
+        SensorDeviceClass.TEMPERATURE,
+    ),
+    description("text", "天气描述", icon="mdi:weather-partly-cloudy"),
+    description(
+        "precip",
+        "小时降水量",
+        UnitOfLength.MILLIMETERS,
+        SensorDeviceClass.PRECIPITATION,
+    ),
+    description("windDir", "风向", icon="mdi:windsock", enabled=False),
+    description("windScale", "风力等级", icon="mdi:weather-windy"),
+    description(
+        "windSpeed",
+        "风速",
+        UnitOfSpeed.KILOMETERS_PER_HOUR,
+        SensorDeviceClass.WIND_SPEED,
+    ),
+    description(
+        "dew", "露点温度", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE
+    ),
+    description("pressure", "大气压强", UnitOfPressure.HPA, SensorDeviceClass.PRESSURE),
+    description("vis", "能见度", UnitOfLength.KILOMETERS, SensorDeviceClass.DISTANCE),
+    # Keep this legacy entity, but do not fabricate a city name from fxLink.
+    description("place", "气候位置", icon="mdi:map-marker"),
+    description("cloud", "云量", PERCENTAGE),
+    description("primary", "空气质量的主要污染物", group="air"),
+    description("category", "空气质量指数级别", group="air"),
+    description("level", "空气质量指数等级", group="air"),
+    *(
+        description(key, name, UnitOfDensity.MICROGRAMS_PER_CUBIC_METER, kind, "air")
+        for key, name, kind in (
+            ("pm25", "PM2.5", SensorDeviceClass.PM25),
+            ("pm10", "PM10", SensorDeviceClass.PM10),
+            ("no2", "二氧化氮", SensorDeviceClass.NITROGEN_DIOXIDE),
+            ("so2", "二氧化硫", SensorDeviceClass.SULPHUR_DIOXIDE),
+            ("o3", "臭氧", SensorDeviceClass.OZONE),
         )
+    ),
+    description(
+        "co",
+        "一氧化碳",
+        UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER,
+        SensorDeviceClass.CO,
+        "air",
+    ),
+    description(
+        "qlty", "综合空气质量", device_class=SensorDeviceClass.AQI, group="air"
+    ),
+    description("disaster_warn", "灾害预警", group="warning", icon="mdi:alert"),
+)
+SUGGESTIONS = tuple(
+    description(key, name, group="suggestions")
+    for key, name in (
+        ("air", "空气污染扩散条件指数"),
+        ("comfortable", "舒适度指数"),
+        ("cw", "洗车指数"),
+        ("drsg", "穿衣指数"),
+        ("flu", "感冒指数"),
+        ("sport", "运动指数"),
+        ("trav", "旅行指数"),
+        ("uv", "紫外线指数"),
+        ("guomin", "过敏指数"),
+        ("kongtiao", "空调开启指数"),
+        ("sunglass", "太阳镜指数"),
+        ("fangshai", "防晒指数"),
+        ("liangshai", "晾晒指数"),
+        ("jiaotong", "交通指数"),
+    )
+)
 
-    async def async_update(self):
-        """Update Colorfulclouds entity."""
-        await self.coordinator.async_request_refresh()
+
+async def async_setup_entry(hass, entry, async_add_entities):
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    definitions = SENSORS + (SUGGESTIONS if entry.options.get("sugg", False) else ())
+    async_add_entities(
+        HfweatherSensor(coordinator, definition) for definition in definitions
+    )
+
+
+class HfweatherSensor(HfEntity, SensorEntity):
+    def __init__(self, coordinator, definition):
+        super().__init__(coordinator, definition.group)
+        self.entity_description = definition
+        # Preserve legacy suffix spelling and naming during registry migration.
+        self._attr_unique_id = f"{coordinator.entry.unique_id}-{definition.key}".lower()
+        self._attr_name = f"{coordinator.entry.title} {definition.name}"
+
+    @property
+    def native_value(self):
+        value = self.values.get(self.entity_description.key)
+        if self._product_group == "suggestions" and isinstance(value, list):
+            value = value[0] if value else None
+        return value[:255] if isinstance(value, str) else value
+
+    @property
+    def available(self):
+        return super().available and self.native_value is not None
+
+    @property
+    def extra_state_attributes(self):
+        attrs = super().extra_state_attributes
+        if self._product_group == "warning":
+            attrs["warning_text"] = (self.values.get("disaster_warn") or "")[:8192]
+            attrs["warning_count"] = self.values.get("warning_count")
+        if self._product_group == "suggestions":
+            value = self.values.get(self.entity_description.key)
+            if isinstance(value, list) and len(value) > 1:
+                attrs["suggestion"] = value[1]
+        return attrs

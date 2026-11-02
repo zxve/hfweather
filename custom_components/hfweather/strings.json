@@ -1,0 +1,18 @@
+{
+  "title": "Hfweather",
+  "config": {
+    "step": {
+      "user": {"title": "Hfweather", "description": "Configure a new location or migrate your legacy zxve integration.", "menu_options": {"configure": "New configuration", "migrate": "Migrate legacy configuration"}},
+      "configure": {"title": "Hfweather", "description": "Use a QWeather API key and hostname. Existing v7 keys remain supported.", "data": {"name": "Name", "api_key": "API key", "api_host": "QWeather API hostname", "latitude": "Latitude", "longitude": "Longitude"}},
+      "migrate": {"title": "Migrate legacy configuration", "description": "Preserve entity IDs and devices. Back up before proceeding.", "data": {"legacy_entry_id": "Legacy integration"}},
+      "reconfigure": {"title": "Reconfigure Hfweather", "data": {"name": "Name", "api_key": "API key", "api_host": "QWeather API hostname", "latitude": "Latitude", "longitude": "Longitude"}},
+      "reauth_confirm": {"title": "Reauthenticate QWeather", "description": "Enter a replacement API key.", "data": {"api_key": "API key"}}
+    },
+    "error": {"invalid_auth": "The API key was rejected.", "cannot_connect": "Check connectivity, product access and quota.", "invalid_input": "Check the API hostname and input values.", "invalid_location": "Provide a valid coordinate source."},
+    "abort": {"already_configured": "This configuration has already been imported.", "invalid_legacy_entry": "Not a compatible zxve/hfweather legacy configuration.", "reauth_successful": "Authentication updated.", "reconfigure_successful": "Configuration updated."}
+  },
+  "options": {
+    "step": {"init": {"title": "Weather options", "description": "fixed uses configured coordinates; home uses HA location; entity follows a tracker. Movement refreshes require 5 km and at least 10 minutes. Forecast products require account access.", "data": {"dailysteps": "Daily forecast endpoint", "hourlysteps": "Hourly forecast endpoint", "interval": "Refresh interval (minutes)", "sugg": "Fetch lifestyle indices", "disaster_level": "Minimum warning severity", "location_mode": "Location mode: fixed / home / entity", "location_entity": "Tracker or geocoded-location entity ID"}}},
+    "error": {"invalid_location": "The entity has no valid coordinates. Select a tracker with latitude/longitude attributes."}
+  }
+}

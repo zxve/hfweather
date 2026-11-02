@@ -1,11 +1,7 @@
 {
-  "name": "HeFeng Weather",
+  "name": "Hfweather (zxve)",
   "content_in_root": false,
   "render_readme": true,
   "country": "CN",
-  "homeassistant": "2024.5.1",
-  "domains": [
-    "weather",
-    "sensor"
-  ]
+  "homeassistant": "2026.10.0"
 }

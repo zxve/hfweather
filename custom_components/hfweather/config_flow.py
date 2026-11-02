@@ -1,168 +1,223 @@
-'''
-输入参数配置
-'''
-import json
-import logging
-from collections import OrderedDict
+"""Validated user/options/reauth/reconfigure flows, plus explicit legacy import."""
 
-import homeassistant.helpers.config_validation as cv
-import requests
+import uuid
+
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.const import (
-    CONF_API_KEY,
-    CONF_LATITUDE,
-    CONF_LONGITUDE,
-    CONF_NAME,
-)
 from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import selector
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .api import WeatherAPIError, WeatherAuthError, WeatherClient, validate_host
 from .const import (
-    CONF_SUGG,
-    CONF_DAILYSTEPS,
-    CONF_DISASTER_LEVEL,
-    # CONF_DISASTER_MSG,
-    CONF_HOURLYSTEPS,
-    DOMAIN, NAME,
-    CONF_INTERVAL,
+    CONF_API_HOST,
+    CONF_LEGACY_ENTRY,
+    CONF_LOCATION_ENTITY,
+    CONF_LOCATION_MODE,
+    DAILY_CHOICES,
+    DEFAULT_HOST,
+    DEFAULT_INTERVAL,
+    DOMAIN,
+    HOURLY_CHOICES,
+    LOCATION_MODES,
+    NAME,
 )
+from .migration import legacy_entry
+from .models import coordinates, parse_current, state_coordinates
 
-_LOGGER = logging.getLogger(__name__)
+
+def user_schema(defaults=None):
+    d = defaults or {}
+    return vol.Schema(
+        {
+            vol.Required("name", default=d.get("name", NAME)): str,
+            vol.Required("api_key"): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+            vol.Required(
+                CONF_API_HOST, default=d.get(CONF_API_HOST, DEFAULT_HOST)
+            ): str,
+            vol.Required("latitude", default=d.get("latitude", 0)): cv.latitude,
+            vol.Required("longitude", default=d.get("longitude", 0)): cv.longitude,
+        }
+    )
 
 
-@config_entries.HANDLERS.register(DOMAIN)
-class HfweatherHandler(config_entries.ConfigFlow, domain=DOMAIN):
-    """初始化设置模块"""
+def options_schema(entry):
+    o = entry.options
+    return vol.Schema(
+        {
+            vol.Required("dailysteps", default=o.get("dailysteps", 7)): vol.In(
+                DAILY_CHOICES
+            ),
+            vol.Required("hourlysteps", default=o.get("hourlysteps", 24)): vol.In(
+                HOURLY_CHOICES
+            ),
+            vol.Required(
+                "interval", default=o.get("interval", DEFAULT_INTERVAL)
+            ): vol.All(vol.Coerce(int), vol.Range(min=10, max=1440)),
+            vol.Required("sugg", default=o.get("sugg", False)): bool,
+            vol.Required("disaster_level", default=o.get("disaster_level", 1)): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=6)
+            ),
+            vol.Required(
+                CONF_LOCATION_MODE, default=o.get(CONF_LOCATION_MODE, "fixed")
+            ): vol.In(LOCATION_MODES),
+            vol.Optional(
+                CONF_LOCATION_ENTITY, default=o.get(CONF_LOCATION_ENTITY, "")
+            ): str,
+        }
+    )
+
+
+class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    VERSION = 1
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        return HfweatherOptionsFlow(config_entry)
+        return OptionsFlow()
 
-    def __init__(self):
-        self._errors = {}
-
-    # @asyncio.coroutine
-    def get_data(self, url):
-        """请求url"""
-        json_text = requests.get(url, timeout=100).content
-        resdata = json.loads(json_text)
-        return resdata
+    async def _validate(self, data):
+        try:
+            host = validate_host(data.get(CONF_API_HOST, DEFAULT_HOST))
+            position = coordinates((data.get("longitude"), data.get("latitude")))
+            if position is None:
+                return "invalid_location"
+            client = WeatherClient(
+                async_get_clientsession(self.hass), data["api_key"], host
+            )
+            parse_current(await client.request("weather/now", *position))
+        except WeatherAuthError:
+            return "invalid_auth"
+        except WeatherAPIError:
+            return "cannot_connect"
+        except (ValueError, KeyError):
+            return "invalid_input"
+        return None
 
     async def async_step_user(self, user_input=None):
-        """获取第一次数据"""
-        try:
-            self._errors = {}
-            if user_input is not None:
-                # 若location则使用，否则使用user_input的经纬度
-                if user_input["location"] != 'None':
-                    # lat, lon = self.hass.states.get(user_input["location"]).state.split(",")
-                    lat, lon = self.hass.states.get(user_input["location"]).attributes["location"]
-                    user_input["latitude"] = lat
-                    user_input["longitude"] = lon
-
-                existing = await self._check_existing(user_input[CONF_NAME])
-                if existing:
-                    return self.async_abort(reason="already_configured")
-
-                url = str.format(
-                    "https://devapi.qweather.com/{}/weather/now?location={},{}&key={}",
-                    user_input["api_version"],
-                    user_input["longitude"],
-                    user_input["latitude"],
-                    user_input["api_key"])
-                redata = await self.hass.async_add_executor_job(self.get_data, url)
-                status = redata['code']
-                if status == '200':
-                    await self.async_set_unique_id(
-                        f"{user_input['longitude']}-{user_input['latitude']}".replace(".", "_"))
-                    self._abort_if_unique_id_configured()
-                    return self.async_create_entry(
-                        title=user_input[CONF_NAME], data=user_input
-                    )
-                else:
-                    self._errors["base"] = "communication"
-
-                return await self._show_config_form(user_input)
-
-            return await self._show_config_form(user_input)
-        except Exception as e:
-            # traceback.print_exc()
-            raise e
-
-    async def _show_config_form(self, user_input):
-        """第一次配置参数"""
-        try:
-            data_schema = OrderedDict()
-            data_schema[vol.Required(CONF_API_KEY)] = str
-            data_schema[vol.Optional("location", default="sensor.xxx_geocoded_location")] = str
-            data_schema[vol.Optional("api_version", default="v7")] = str
-            data_schema[vol.Optional(CONF_LONGITUDE,
-                                     default=self.hass.config.longitude)] = cv.longitude
-            data_schema[vol.Optional(CONF_LATITUDE,
-                                     default=self.hass.config.latitude)] = cv.latitude
-
-            data_schema[vol.Optional(CONF_NAME, default=NAME)] = str
-            return self.async_show_form(
-                step_id="user", data_schema=vol.Schema(data_schema), errors=self._errors
+        compatible = []
+        for entry in self.hass.config_entries.async_entries("heweather"):
+            try:
+                compatible.append(legacy_entry(self.hass, entry.entry_id))
+            except ValueError:
+                continue
+        if compatible:
+            return self.async_show_menu(
+                step_id="user", menu_options=["configure", "migrate"]
             )
-        except Exception as e:
-            raise e
+        return await self.async_step_configure(user_input)
+
+    async def async_step_migrate(self, user_input=None):
+        if user_input is not None:
+            return await self.async_step_import(user_input)
+        choices = {}
+        for entry in self.hass.config_entries.async_entries("heweather"):
+            try:
+                old = legacy_entry(self.hass, entry.entry_id)
+                choices[old.entry_id] = old.title
+            except ValueError:
+                continue
+        if not choices:
+            return self.async_abort(reason="invalid_legacy_entry")
+        return self.async_show_form(
+            step_id="migrate",
+            data_schema=vol.Schema({vol.Required(CONF_LEGACY_ENTRY): vol.In(choices)}),
+        )
+
+    async def async_step_configure(self, user_input=None):
+        errors = {}
+        if user_input is not None:
+            error = await self._validate(user_input)
+            if error:
+                errors["base"] = error
+            else:
+                # Identity must not change as an RV moves or its name changes.
+                await self.async_set_unique_id(uuid.uuid4().hex)
+                return self.async_create_entry(
+                    title=user_input["name"], data=user_input
+                )
+        defaults = {
+            "latitude": self.hass.config.latitude,
+            "longitude": self.hass.config.longitude,
+        }
+        if user_input:
+            defaults.update(user_input)
+        return self.async_show_form(
+            step_id="configure", data_schema=user_schema(defaults), errors=errors
+        )
 
     async def async_step_import(self, user_input):
-        """Import a config entry."""
-        if self._async_current_entries():
-            return self.async_abort(reason="single_instance_allowed")
+        try:
+            old = legacy_entry(self.hass, user_input[CONF_LEGACY_ENTRY])
+        except (ValueError, KeyError, TypeError):
+            return self.async_abort(reason="invalid_legacy_entry")
+        await self.async_set_unique_id(old.unique_id)
+        self._abort_if_unique_id_configured()
+        data = dict(old.data)
+        data[CONF_API_HOST] = DEFAULT_HOST
+        data[CONF_LEGACY_ENTRY] = old.entry_id
+        # Preserve the old fixed-coordinate behavior; do not silently switch to a broken address sensor.
+        options = dict(old.options)
+        options.setdefault(CONF_LOCATION_MODE, "fixed")
+        if options.get("dailysteps", 7) not in DAILY_CHOICES:
+            options["dailysteps"] = 7
+        if options.get("hourlysteps", 24) not in HOURLY_CHOICES:
+            options["hourlysteps"] = 24
+        options["interval"] = max(
+            10, min(int(options.get("interval", DEFAULT_INTERVAL)), 1440)
+        )
+        return self.async_create_entry(title=old.title, data=data, options=options)
 
-        return self.async_create_entry(title="configuration.yaml", data={})
+    async def async_step_reauth(self, entry_data):
+        return await self.async_step_reauth_confirm()
 
-    async def _check_existing(self, host):
-        for entry in self._async_current_entries():
-            if host == entry.data.get(CONF_NAME):
-                return True
-
-
-class HfweatherOptionsFlow(config_entries.OptionsFlow):
-    """选项设置"""
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
-
-    async def async_step_init(self, user_input=None):
-        """Manage the options."""
-        return await self.async_step_user()
-
-    async def async_step_user(self, user_input=None):
-        """init by user"""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
+    async def async_step_reauth_confirm(self, user_input=None):
+        entry = self._get_reauth_entry()
+        errors = {}
+        if user_input:
+            data = {**entry.data, **user_input}
+            error = await self._validate(data)
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_update_reload_and_abort(
+                    entry, data_updates=user_input
+                )
         return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_DAILYSTEPS,
-                        default=self.config_entry.options.get(CONF_DAILYSTEPS, 7),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=3, max=7)),
-                    vol.Optional(
-                        CONF_HOURLYSTEPS,
-                        default=self.config_entry.options.get(CONF_HOURLYSTEPS, 24),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=24, max=168)),
-                    vol.Optional(
-                        CONF_SUGG,
-                        default=self.config_entry.options.get(CONF_SUGG, False),
-                    ): bool,
-                    vol.Optional(
-                        CONF_INTERVAL,
-                        default=self.config_entry.options.get(CONF_INTERVAL, 720),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=60)),
-                    vol.Optional(
-                        CONF_DISASTER_LEVEL,
-                        default=self.config_entry.options.get(CONF_DISASTER_LEVEL, 1),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=6)),
-                    # vol.Optional(
-                    #     CONF_DISASTER_MSG,
-                    #     default=self.config_entry.options.get(CONF_DISASTER_MSG, 24),
-                    # ): vol.All(vol.Coerce(str), "title"),
-                }
-            ),
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required("api_key"): str}),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(self, user_input=None):
+        entry = self._get_reconfigure_entry()
+        errors = {}
+        if user_input:
+            error = await self._validate(user_input)
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_update_reload_and_abort(
+                    entry, data_updates=user_input
+                )
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=user_schema(entry.data), errors=errors
+        )
+
+
+class OptionsFlow(config_entries.OptionsFlow):
+    async def async_step_init(self, user_input=None):
+        errors = {}
+        if user_input is not None:
+            if user_input[CONF_LOCATION_MODE] == "entity":
+                state = self.hass.states.get(user_input.get(CONF_LOCATION_ENTITY, ""))
+                if state_coordinates(state) is None:
+                    errors["base"] = "invalid_location"
+            if not errors:
+                return self.async_create_entry(title="", data=user_input)
+        return self.async_show_form(
+            step_id="init", data_schema=options_schema(self.config_entry), errors=errors
         )

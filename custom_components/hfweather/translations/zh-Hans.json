@@ -1,40 +1,18 @@
 {
+  "title": "Hfweather 和风天气",
   "config": {
-    "title": "和风天气",
     "step": {
-      "user": {
-        "title": "和风天气",
-        "description": "如果您需要配置方面的帮助，请查看此处: https://github.com/zxve/hfweather",
-        "data": {
-          "api_key": "和风API Key",
-          "location": "手机定位sensor, xxx是phone name",
-          "api_version": "API版本,默认是v7",
-          "latitude": "维度",
-          "longitude": "经度",
-          "name": "名称"
-        }
-      }
+      "user": {"title": "Hfweather 和风天气", "description": "新建配置，或将本项目旧 heweather 配置迁移到独立域。", "menu_options": {"configure": "新建配置", "migrate": "迁移旧版配置（保留实体）"}},
+      "configure": {"title": "Hfweather 和风天气", "description": "输入和风 API Key 和 API 主机名，支持已有 v7 配置。主机名不能包含 https:// 或端口。", "data": {"name": "名称", "api_key": "API Key", "api_host": "和风 API 主机名", "latitude": "纬度", "longitude": "经度"}},
+      "migrate": {"title": "迁移旧版配置", "description": "保留实体 ID、设备和历史关联。请先做好备份。", "data": {"legacy_entry_id": "原有天气集成"}},
+      "reconfigure": {"title": "重新配置天气", "data": {"name": "名称", "api_key": "API Key", "api_host": "和风 API 主机名", "latitude": "纬度", "longitude": "经度"}},
+      "reauth_confirm": {"title": "重新验证和风凭据", "description": "请输入有效的 API Key。", "data": {"api_key": "API Key"}}
     },
-    "error": {
-      "communication": "Key可能无效，请检查输入值."
-    },
-    "abort": {
-      "single_instance_allowed": "仅允许单个配置.",
-      "already_configured": "请勿重复配置."
-    }
+    "error": {"invalid_auth": "API Key 验证失败。", "cannot_connect": "无法获取天气，请检查网络、产品权限及请求额度。", "invalid_input": "请检查 API 主机名和输入内容。", "invalid_location": "没有有效的经纬度。"},
+    "abort": {"already_configured": "这份配置已经迁移，无需重复添加。", "invalid_legacy_entry": "不是可迁移的 zxve/hfweather 旧配置。", "reauth_successful": "认证信息已更新。", "reconfigure_successful": "配置已更新。"}
   },
   "options": {
-    "step": {
-      "user": {
-        "data": {
-          "dailysteps": "天级预报(3-7)",
-          "hourlysteps": "小时级预报(24-186)",
-          "sugg": "天气建议",
-          "interval": "定时刷新数据间隔（分钟）",
-          "disaster_level": "灾情预警级别"
-        },
-        "description": "设置你需要获取预报数据的天数,以及极端天气预警数据"
-      }
-    }
+    "step": {"init": {"title": "天气选项", "description": "fixed 使用固定坐标，home 使用 HA 位置，entity 跟随定位实体。移动超过 5 公里才提前刷新，最短间隔 10 分钟。预报长度取决于账号产品权限；迁移保持原来的固定位置行为。", "data": {"dailysteps": "逐日预报接口", "hourlysteps": "逐小时预报接口", "interval": "刷新间隔（分钟）", "sugg": "获取生活指数", "disaster_level": "预警最低级别", "location_mode": "位置模式：fixed / home / entity", "location_entity": "定位实体 ID（推荐 device_tracker）"}}},
+    "error": {"invalid_location": "该实体没有有效经纬度，请选择带 latitude/longitude 属性的定位实体。"}
   }
 }

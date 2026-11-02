@@ -1,92 +1,66 @@
-"""初始化"""
+"""Set up the independent hfweather integration with an explicit legacy bridge."""
 
-import logging
-
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    CONF_API_KEY,
-    CONF_API_VERSION,
-    CONF_LATITUDE,
-    CONF_LONGITUDE,
-)
-from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from .hf import HfCoordinator
+from homeassistant.helpers.entity import entity_sources
 
-from .const import (
-    CONF_SUGG,
-    CONF_DAILYSTEPS,
-    CONF_HOURLYSTEPS,
-    CONF_INTERVAL,
-    COORDINATOR,
-    DOMAIN,
-    UNDO_UPDATE_LISTENER,
-    # CONF_DISASTER_MSG,
-    CONF_DISASTER_LEVEL,
-    PLATFORMS,
-)
-
-_LOGGER = logging.getLogger(__name__)
-
-# _LOGGER.info("zxve 000")
+from .api import WeatherClient
+from .const import CONF_API_HOST, CONF_LEGACY_ENTRY, DEFAULT_HOST, DOMAIN, PLATFORMS
+from .coordinator import HfCoordinator
+from .migration import LegacyMigration, legacy_entry
 
 
-async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-    """hf setup entry"""
-    try:
-        hass.data.setdefault(DOMAIN, {})
-        api_key = config_entry.data[CONF_API_KEY]
-        location_key = config_entry.unique_id
-        longitude = config_entry.data[CONF_LONGITUDE]
-        latitude = config_entry.data[CONF_LATITUDE]
-        api_version = config_entry.data[CONF_API_VERSION]
-        dailysteps = config_entry.options.get(CONF_DAILYSTEPS, 7)
-        hourlysteps = config_entry.options.get(CONF_HOURLYSTEPS, 24)
-        # disaster_msg = config_entry.options.get(CONF_DISASTER_MSG, "title")
-        disaster_level = config_entry.options.get(CONF_DISASTER_LEVEL, 1)
-        sugg = config_entry.options.get(CONF_SUGG, False)
-        interval = config_entry.options.get(CONF_INTERVAL, 720)
-        # _LOGGER.debug("Using location_key: %s, get forecast: %s", location_key, api_version)
-        websession = async_get_clientsession(hass)
-        coordinator = HfCoordinator(
-            hass,
-            websession,
-            api_key,
-            api_version,
-            location_key,
-            longitude,
-            latitude,
-            dailysteps,
-            hourlysteps,
-            # disaster_msg,
-            disaster_level,
-            sugg,
-            interval
-        )
-        await coordinator.async_config_entry_first_refresh()
-        undo_listener = config_entry.add_update_listener(update_listener)
-        hass.data[DOMAIN][config_entry.entry_id] = {
-            COORDINATOR: coordinator,
-            UNDO_UPDATE_LISTENER: undo_listener,
-        }
-        await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
-
-        return True
-    except Exception as e:
-        _LOGGER.info("hew- init setup entry: %s", e)
-        raise e
-
-
-async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(
-        config_entry, PLATFORMS
+async def async_setup_entry(hass, entry):
+    client = WeatherClient(
+        async_get_clientsession(hass),
+        entry.data["api_key"],
+        entry.data.get(CONF_API_HOST, DEFAULT_HOST),
     )
-    hass.data[DOMAIN].pop(config_entry.entry_id)
+    coordinator = HfCoordinator(hass, entry, client)
+    await coordinator.async_config_entry_first_refresh()
+    transaction = None
+    old_id = entry.data.get(CONF_LEGACY_ENTRY)
+    if old_id and hass.config_entries.async_get_entry(old_id):
+        try:
+            transaction = LegacyMigration(hass, legacy_entry(hass, old_id), entry)
+        except ValueError:
+            raise ConfigEntryError("Legacy source entry is not compatible") from None
+        await transaction.prepare()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        if transaction:
+            if any(
+                row.disabled_by is None and row.entity_id not in entity_sources(hass)
+                for row in transaction.entities
+            ):
+                raise ConfigEntryError(
+                    "A migrated entity did not load; retaining the legacy configuration"
+                )
+            await transaction.finish()
+    except Exception:
+        await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        if transaction:
+            await transaction.rollback()
+        raise
+    if old_id:
+        data = dict(entry.data)
+        data.pop(CONF_LEGACY_ENTRY, None)
+        hass.config_entries.async_update_entry(entry, data=data)
+    coordinator.start_location_tracking()
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+    return True
 
-    return unload_ok
+
+async def async_unload_entry(hass, entry):
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
+    coordinator = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    if coordinator:
+        coordinator.stop_location_tracking()
+    return True
 
 
-async def update_listener(hass, config_entry):
-    """Update listener."""
-    await hass.config_entries.async_reload(config_entry.entry_id)
+async def _async_options_updated(hass, entry):
+    await hass.config_entries.async_reload(entry.entry_id)
