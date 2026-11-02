@@ -67,3 +67,20 @@ python -m unittest discover -s tests -v
 CI 已配置单元测试、关键语法检查、hassfest 和 HACS 校验。
 配置 workflow 不等于已在 GitHub 运行通过，发布前需确认实际结果。
 不声明已取得 HA Integration Quality Scale 等级。
+
+## 1.1.0 当前环境验收（2026-11-03）
+
+- 手机原生 HA 2026.10.4 / Python 3.14 上，42 项隔离回归测试全部通过。
+- Ruff 的语法、导入和未定义符号检查通过。
+- 原生配置流已将旧条目迁移为 `hfweather`；25 个注册实体的实体 ID、唯一 ID、设备 ID、
+  名称及禁用状态均与迁移前一致，24 个启用实体全部可用。
+- 主动刷新返回成功，实体的成功更新时间推进；原生 `weather.get_forecasts` 返回 7 天和 24 小时，
+  首条时间使用提供方日期/时区，不再由查询时间生成。
+- 重启后自动加载成功，保留属性兼容警告已清除；剩余是 HA 对自定义集成的通用提示。
+- 三路正式录像均恢复 recording，进程各一个，并已写入新文件。
+- 主备份在手机 `/config/migration-backups/hfweather-independent-20261102T182033Z`；
+  保留属性修正备份为 `hfweather-group-compat-20261102T182436Z`。
+- 现有位置模式与显式刷新间隔未静默改变。手机地址上报在验收时已恢复，但不是本插件负责修复。
+
+此记录是本地代码和当前 HA 的验收，不代表已推送 GitHub、发布 release 或运行远端 CI。
+远端发布及 HACS 来源整理应在确认分支后单独进行，不能再把第三方 heweather 当作本项目更新。
